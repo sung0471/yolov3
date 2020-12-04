@@ -249,3 +249,117 @@ class Darknet(nn.Module):
     def __init__(self, config_path, img_size=416):
         super(Darknet, self).__init__()
         self.module_defs = parse_model_config(config_path)
+        self.net_info, self.module_list = create_modules(self.module_defs)
+        self.yolo_layers = [layer[0] for layer in self.module_list if hasattr(layer[0], 'metrics')]
+        self.img_size = img_size
+        self.seen = 0
+        self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+
+    def forward(self, x, targets=None):
+        img_dim = x.shape[2]
+        loss = 0
+        layer_outputs, yolo_outputs = [], []
+        for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
+            if module_def['type'] in ['convolutional', 'upsample', 'maxpool']:
+                x = module(x)
+            elif module_def['type'] == 'route':
+                x = torch.cat([layer_outputs[int(layer_i)] for layer_i in module_def['layers'].split(',')], 1)
+            elif module_def['type'] == 'shortcut':
+                layer_i = int(module_def['from'])
+                x = layer_outputs[-1] + layer_outputs[layer_i]
+            elif module_def['type'] == 'yolo':
+                x, layer_loss = module[0](x, targets, img_dim)
+                loss += layer_loss
+                yolo_outputs.append(x)
+            layer_outputs.append(x)
+        yolo_outputs = to_cpu(torch.cat(yolo_outputs, 1))
+
+        return yolo_outputs if targets is None else (loss, yolo_outputs)
+
+    def load_darknet_weights(self, weight_path):
+        # weights file 열기
+        with open(weight_path, 'rb') as f:
+            header = np.fromfile(f, dtype=np.int32, count=5)    # 처음 5개를 header values로 설정
+            self.header_info = header   # weight 저장 시, header 작성을 필요로함
+            self.seen = header[3]   # 훈련하는 동안 보여주는 이미지 수
+            weights = np.fromfile(f, dtype=np.float32)  # 나머지가 weights
+
+        # backbone weights를 얻어내기 위한 cutoff를 정함
+        cutoff = None
+        if 'darknet53.conv.74' in weight_path:
+            cutoff = 75
+
+        ptr = 0
+        for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
+            if i == cutoff:
+                break
+            if module_def['type'] == 'convolutional':
+                conv_layer = module[0]
+                if module_def['batch_normalize']:
+                    # BN bias, weights, running mean and running variance를 로드
+                    bn_layer = module[1]
+                    num_b = bn_layer.bias.numel()   # biases 개수
+
+                    # Bias
+                    bn_b = torch.from_numpy(weights[ptr: ptr + num_b]).view_as(bn_layer.bias)
+                    bn_layer.bias.data.copy_(bn_b)
+                    ptr += num_b
+
+                    # Weight
+                    bn_w = torch.from_numpy(weights[ptr: ptr + num_b]).view_as(bn_layer.weight)
+                    bn_layer.weight.data.copy_(bn_w)
+                    ptr += num_b
+
+                    # Running Mean
+                    bn_rm = torch.from_numpy(weights[ptr: ptr + num_b]).view_as(bn_layer.running_mean)
+                    bn_layer.running_mean.data.copy_(bn_rm)
+                    ptr += num_b
+
+                    # Running Variance
+                    bn_rv = torch.from_numpy(weights[ptr: ptr + num_b]).view_as(bn_layer.running_var)
+                    bn_layer.running_var.data.copy_(bn_rv)
+                    ptr += num_b
+                else:
+                    # Load conv. bias
+                    num_b = conv_layer.bias.numel()
+                    conv_b = torch.from_numpy(weights[ptr: ptr+num_b]).view_as(conv_layer)
+                    conv_layer.bias.data.copy_(conv_b)
+                    ptr += num_b
+
+                # Load conv. weights
+                num_w = conv_layer.weight.numel()
+                conv_w = torch.from_numpy(weights[ptr: ptr + num_w]).view_as(conv_layer.weight)
+                conv_layer.weight.data.copy_(conv_w)
+                ptr += num_w
+
+    def save_darknet_weights(self, path, cutoff=-1):
+        """
+        :param path: new weights file path
+        :param cutoff: save layers 0 ~ cutoff (cutoff=-1 -> all are saved)
+        """
+        fp = open(path, 'wb')
+        self.header_info[3] = self.seen
+        self.header_info.tofile(fp)
+
+        # layers 반복
+        for i, (module_def, module) in enumerate(zip(self.module_defs[:cutoff], self.module_list[:cutoff])):
+            if module_def['type'] == 'convolutional':
+                conv_layer = module[0]
+
+                # batchnorm일 땐, bn를 먼저 로드
+                if module_def['batch_normalize']:
+                    bn_layer = module[1]
+                    bn_layer.bias.data.cpu().numpy().tofile(fp)
+                    bn_layer.weight.data.cpu().numpy().tofile(fp)
+                    bn_layer.running_mean.data.cpu().numpy().tofile(fp)
+                    bn_layer.running_var.data.cpu().numpy().tofile(fp)
+
+                # Load conv bias
+                else:
+                    conv_layer.bias.data.cpu().numpy().tofile(fp)
+
+                # Load conv weights
+                conv_layer.weight.data.cpu().numpy().tofile(fp)
+
+        fp.close()
+
