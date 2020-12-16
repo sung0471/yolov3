@@ -53,7 +53,7 @@ class DetectBoxes:
                 cls = int(outs[-1])
                 color = STANDARD_COLORS[(cls + 1) % len(STANDARD_COLORS)]
 
-                self.draw_boxes(frame, self.classes[cls +  1], outs[4], left, top, right, bottom, color)
+                self.draw_boxes(frame, self.classes[cls + 1], outs[4], left, top, right, bottom, color)
 
     def draw_boxes(self, frame, class_id, score, left, top, right, bottom, color):
         txt_color = (0, 0, 0)
