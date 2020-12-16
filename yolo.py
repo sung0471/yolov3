@@ -30,9 +30,11 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print('Loading Network...')
+    start = time.time()
     model = Darknet(args.config, img_size=args.resol).to(device)
     model.load_darknet_weights(args.weight)
-    print('Network successfully loaded')
+    end = time.time()
+    print('Network successfully loaded : {:.3f}'.format(end - start))
 
     model.eval()
 
