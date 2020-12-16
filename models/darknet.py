@@ -84,7 +84,7 @@ def create_modules(module_defs):
             # Extract anchors
             anchors = [int(x) for x in module_def['anchors'].split(',')]
             anchors = [(anchors[i], anchors[i + 1]) for i in range(0, len(anchors), 2)]
-            anchors = [anchors[i] for i in anchors_idxs]
+            anchors = [anchors[i] for i in anchor_idxs]
             num_classes = int(module_def['classes'])
             img_size = int(net_info['height'])
 
@@ -108,6 +108,7 @@ class Upsample(nn.Module):
 
     def forward(self, x):
         x = F.interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
+        return x
 
 
 class EmptyLayer(nn.Module):
@@ -141,7 +142,7 @@ class YOLOLayer(nn.Module):
         # Calculate offsets for each grid
         self.grid_x = torch.arange(g).repeat(g, 1).view([1, 1, g, g]).type(FloatTensor)
         self.grid_y = torch.arange(g).repeat(g, 1).t().view([1, 1, g, g]).type(FloatTensor)
-        self.scaled_anchors = FloatTensor([(a_w / self.stride, a_h  / self.stride) for a_w, a_h in self.anchors])
+        self.scaled_anchors = FloatTensor([(a_w / self.stride, a_h / self.stride) for a_w, a_h in self.anchors])
         self.anchors_w = self.scaled_anchors[:, 0:1].view((1, self.num_anchors, 1, 1))
         self.anchors_h = self.scaled_anchors[:, 1:2].view((1, self.num_anchors, 1, 1))
 
@@ -162,12 +163,12 @@ class YOLOLayer(nn.Module):
         )
 
         # Get outputs
-        x = torch.sigmoid(prediction[..., 0])
-        y = torch.sigmoid(prediction[..., 1])
-        w = prediction[..., 2]
-        h = prediction[..., 3]
-        pred_conf = torch.sigmoid(prediction[..., 4])
-        pred_cls = torch.sigmoid(prediction[..., 5:])
+        x = torch.sigmoid(prediction[..., 0])   # Center X
+        y = torch.sigmoid(prediction[..., 1])   # Center Y
+        w = prediction[..., 2]  # width
+        h = prediction[..., 3]  # height
+        pred_conf = torch.sigmoid(prediction[..., 4])   # conf
+        pred_cls = torch.sigmoid(prediction[..., 5:])   # cls prediction
 
         # if grid size does not match current we compute new offsets
         if grid_size != self.grid_size:
@@ -322,7 +323,7 @@ class Darknet(nn.Module):
                 else:
                     # Load conv. bias
                     num_b = conv_layer.bias.numel()
-                    conv_b = torch.from_numpy(weights[ptr: ptr+num_b]).view_as(conv_layer)
+                    conv_b = torch.from_numpy(weights[ptr: ptr+num_b]).view_as(conv_layer.bias)
                     conv_layer.bias.data.copy_(conv_b)
                     ptr += num_b
 
@@ -362,4 +363,3 @@ class Darknet(nn.Module):
                 conv_layer.weight.data.cpu().numpy().tofile(fp)
 
         fp.close()
-
