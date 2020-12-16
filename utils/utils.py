@@ -198,8 +198,8 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
     # 사각형 겹치는 영역의 좌표 얻어냄
     inter_rect_x1 = torch.max(b1_x1, b2_x1)
     inter_rect_y1 = torch.max(b1_y1, b2_y1)
-    inter_rect_x2 = torch.min(b1_y1, b2_y1)
-    inter_rect_y2 = torch.min(b1_y1, b2_y1)
+    inter_rect_x2 = torch.min(b1_x2, b2_x2)
+    inter_rect_y2 = torch.min(b1_y2, b2_y2)
 
     # Intersection area
     inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1 + 1, min=0) * torch.clamp(
@@ -277,6 +277,7 @@ def non_max_suppression(prediction, conf_thres=0.5, nms_thres=0.4):
         score = image_pred[:, 4] * image_pred[:, 5:].max(1)[0]
 
         # 나머지 bounding box들의 confidence score 기준으로 정렬
+        # (-score).argsort() = score를 내림차순으로 정렬한 array의 index
         image_pred = image_pred[(-score).argsort()]
         class_confs, class_preds = image_pred[:, 5:].max(1, keepdim=True)
         detections = torch.cat((image_pred[:, :5], class_confs.float(), class_preds.float()), 1)
